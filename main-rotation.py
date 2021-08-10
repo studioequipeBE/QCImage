@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*
 
 # Fichier: Main (+ les fonctions...)
-# Version: 1.1.1
+# Version: 0.9.0
 
 # == IMPORTS ==
 
@@ -18,8 +18,6 @@ import ChoixFichier as cf  # Programme qui choisi le fichier a analyser.
 import ServeurDate as date
 import TimecodeP as tc
 import Rapport as r
-# import sys
-# sys.path.insert(0, './outils')
 from outils.metadata import MetaData
 
 # == VALEURS ==
@@ -72,18 +70,6 @@ num_erreur = 0
 
 # == FONCTIONS ==
 
-# Donne le TC actuel à l'aide d'un nombre d'image et sur base d'un tc de depard:
-def TcActuel(numImage, framerate=24):
-    tc1 = Timecode(framerate, starttc)
-    if numImage > 0:
-        # Comme le résultat est toujours une image en trop, j'enleve ce qu'il faut: :)
-        tc2 = Timecode(framerate, tc.frames_to_timecode((numImage - 1), framerate))
-        tc3 = tc1 + tc2
-        return tc3
-    else:
-        return tc1
-
-
 # Met a jour la liste des erreurs pour ecrire dans le rapport:
 def UpdateListeProbleme(numImage):
     global list_tc_in, list_tc_out, list_erreur, liste_option, num_erreur
@@ -92,13 +78,11 @@ def UpdateListeProbleme(numImage):
     for i in range(0, np.size(list_tc_in)):
         if i < np.size(list_tc_in) and list_tc_out[i] != (numImage - 1):
             num_erreur = num_erreur + 1
-            print(str(num_erreur) + " / " + str(list_tc_in[i]) + " : update liste, on ajoute une erreur!")
+            print(str(num_erreur) + " / " + str(int(list_tc_in[i])) + " : update liste, on ajoute une erreur!")
             # On ecrit dans le rapport l'erreur:
 
             # La notion de temps en timecode
-            # r.setRapport(str(TcActuel(list_tc_in[i], framerate)) + " a " + str(TcActuel(list_tc_out[i], framerate)) + ": " + str(list_erreur[i]) + "\n")
             # La notion de temps en image
-            # r.setRapport(str(int(list_tc_in[i])) + " a " + str(int(list_tc_out[i])) + ": " + str(list_erreur[i]) + "\n")
             r.addProbleme(str(int(list_tc_in[i])), str(int(list_tc_out[i])), str(list_erreur[i]), str(liste_option[i]))
 
             # On supprime de la liste l'erreur:
@@ -128,8 +112,8 @@ def Probleme(message, option, numImage):
         # Dans append, on spécifie le tableau à qui on ajoute une valeur.
         list_tc_in = np.append(list_tc_in, numImage)
         list_tc_out = np.append(list_tc_out, numImage)
-        liste_option = np.append(liste_option, option)
         list_erreur = np.append(list_erreur, message)
+        liste_option = np.append(liste_option, option)
 
 
 # On définit le ratio et on prepare les matrices d'analyse de l'image:
@@ -238,113 +222,92 @@ def setRatio(ratio_tmp, resolution_tmp):
         sys.exit("Erreur: Ratio inconnu!!!")
 
 
-delta_high = 255.0 * 0.05  # Le delta maximum qu'il peut y avoir entre les plus hautes valeurs (en 8bit).
-delta = 0.21  # Delta qu'on tolère pour la moyenne.
-delta_min = 1 - delta  # Delta min
-delta_max = 1 + delta  # Delta max
-
-
-# Affichage automatisé:
-def setOption(ligne_utile_sum, ligne_avant_sum, ligne_utile_min, ligne_avant_min, ligne_utile_mean, ligne_avant_mean,
-              ligne_utile_max, ligne_avant_max):
+# Définit les options dans le rapport.
+def set_option_image(pixels, image):
     global option_afficher
 
-    if ligne_utile_sum != 0:
-        calcule = (100.0 / ligne_avant_sum) * ligne_utile_sum
-    else:
-        calcule = 0
+    option_afficher = "max : " + str(pixels.max()) + ",<br>"
+    option_afficher += "min : " + str(pixels.min()) + ",<br>"
+    option_afficher += "mean : " + str(pixels.mean()) + ",<br>"
+    option_afficher += "sum : " + str(pixels.sum()) + ",<br>"
+    option_afficher += "total image max : " + str(image.max()) + ",<br>"
+    option_afficher += "total image min : " + str(image.min()) + ",<br>"
+    option_afficher += "total image mean : " + str(image.mean()) + ",<br>"
+    option_afficher += "total image sum : " + str(image.sum()) + "<br>"
 
-    option_afficher = "(ratio: " + str(ligne_utile_sum) + " [~" + str(ligne_utile_mean) + ", -" + str(
-        ligne_utile_min) + ", +" + str(ligne_utile_max) + "] / " + str(ligne_avant_sum) + " [~" + str(
-        ligne_avant_mean) + ", -" + str(ligne_avant_min) + ", +" + str(ligne_avant_max) + "]): " + str(calcule) + "%"
 
+# Calcule s'il y aurait un défaut de rotation sur base d'une liste de pixel renseigné:
+# On calcule sur base de la somme de la valeur des pixels, si c'est (presque) noir, alors c'est considéré comme une erreur.
+def calcule_rotation(pixels):
+    sum = pixels.sum()
+    # mean = pixels.mean()
 
-# Commun entre les différents défauts:
-def DemiLigne(ligne_utile, ligne_avant):
-    global delta_high, delta_min, delta_max, coefficient_resolution
-    # Les sommes:
-    ligne_utile_sum = ligne_utile.sum()
-    ligne_avant_sum = ligne_avant.sum()
-
-    # Les max:
-    ligne_utile_max = ligne_utile.max()
-    ligne_avant_max = ligne_avant.max()
-
-    # La ligne limite (des blankinkgs) ne doit pas avoir un delta plus grande que 19% pour la moyenne.
-    # La ligne limite avec les blankings ne doit pas avoir un delta plus grand que 18% pour les valeurs maximale.
-    if (ligne_avant_max * delta_max > ligne_utile_max > ligne_avant_max * delta_min) or (
-            ligne_avant_sum * delta_max > ligne_utile_sum > ligne_avant_sum * delta_min):
+    # S'il y a le défaut, on retourne True, sinon on retourne faux.
+    if sum < 2:  # or mean < 8:
+        set_option_image(pixels, image)
         return True
-
-    # Le "else" permet de faire les préparations pour les autres calcules:
     else:
-        # Les moyennes:
-        ligne_utile_mean = ligne_utile.mean()
-        ligne_avant_mean = ligne_avant.mean()
-
-        # Si les deux vallent zéro, on ne compte pas d'erreur (cela serait possiblement un défaut de blanking mais pas de demi-ligne).
-        # Si les valeurs (2 lignes) sont vraiment faible (100 = FHD, dû à la compression), on ne compte pas comme un défaut. C'est noir...
-        # Si les deux lignes ont pour valeur maximal 1 (= image noire avec défaut de compression), alors c'est bon, il n'y a pas de souci.
-        # Si inférieur à 100 et que la moyenne est égale à moins d'un 1% près (0,95%), alors c'est bon!
-        if (ligne_utile_sum < 100 * coefficient_resolution and ligne_avant_sum < 100 * coefficient_resolution) and (
-                (ligne_utile_max <= 1 and ligne_avant_max <= 1) or (
-                ligne_avant_mean - 0.0095 <= ligne_utile_mean <= ligne_avant_mean + 0.0095)):
-            return True
-
-        # Le "else" permet de faire les préparations pour les autres calcules:
-        else:
-            # Les min:
-            ligne_utile_min = ligne_utile.min()
-            ligne_avant_min = ligne_avant.min()
-
-            # Cas où les lignes sont dans le noir et la compression est mal faite (cas: Le Milieu De L'Horizon):
-            if (ligne_utile_sum < ligne_utile.size and ligne_avant_sum < ligne_utile.size) and (
-                    ligne_utile_min == 0 and ligne_avant_min == 0) and (
-                    ligne_utile_mean < 0.35 and ligne_avant_mean < 0.35) and (
-                    ligne_utile_max < 20 and ligne_avant_max < 20) and (ligne_avant_max / ligne_utile_max < 1.5):
-                return True
-
-            # Si après toute ces vérifs ce n'est toujours pas bon, alors la ligne est considéré avec le défaut.
-            else:
-                # On désactie l'affichage des options:
-                # setOption(ligne_utile_sum, ligne_avant_sum, ligne_utile_min, ligne_avant_min, ligne_utile_mean, ligne_avant_mean, ligne_utile_max, ligne_avant_max)
-                return False
+        return False
 
 
 # Verifie que la ligne de l'image utile du haut est bien codée (cas 2.39):
-def DemiLigneHaut(image):
-    global delta_high
-    ligne_utile = image[y_debut_haut:(y_debut_haut + 1):1, y_debut_haut:y_debut_bas:1]  # Ligne limite
-    ligne_avant = image[(y_debut_haut + 1):(y_debut_haut + 2):1, y_debut_haut:y_debut_bas:1]
+def noir_haut_gauche(image):
+    global option_afficher, y_debut_haut, x_debut_gauche
 
-    return DemiLigne(ligne_utile, ligne_avant)
+    # pixels = image[y_debut_haut, x_debut_gauche]
+    # Coin, coin-bas, coin-droite.
+    pixels = np.array([
+        image[y_debut_haut, x_debut_gauche],
+        image[y_debut_haut+1, x_debut_gauche],
+        image[y_debut_haut, x_debut_gauche+1]
+    ], dtype=np.uint8)
+
+    return calcule_rotation(pixels)
 
 
 # Verifie que la ligne de l'image utile du bas est bien codée (cas 2.39):
-def DemiLigneBas(image):
-    global delta_high
-    ligne_utile = image[y_debut_bas:(y_debut_bas + 1):1, y_debut_haut:y_debut_bas:1]  # Ligne limite
-    ligne_avant = image[(y_debut_bas - 1):y_debut_bas:1, y_debut_haut:y_debut_bas:1]
+def noir_haut_droite(image, i):
+    global option_afficher, y_debut_haut, x_debut_droite
 
-    return DemiLigne(ligne_utile, ligne_avant)
+    # pixels = image[y_debut_haut, x_debut_droite]
+    # Coin, coin-bas, coin-gauche.
+    pixels = np.array([
+        image[y_debut_haut, x_debut_droite],
+        image[y_debut_haut+1, x_debut_droite],
+        image[y_debut_haut, x_debut_droite-1]
+    ], dtype=np.uint8)
+
+    return calcule_rotation(pixels)
 
 
 # Verifie que la colonne de gauche de l'image utile est bien codée (cas 2.39):
-def DemiLigneGauche(image):
-    global ligne_utile
-    ligne_utile = image[y_debut_haut:y_debut_bas:1, x_debut_gauche:(x_debut_gauche + 1):1]  # Ligne limite
-    ligne_avant = image[y_debut_haut:y_debut_bas:1, (x_debut_gauche + 1):(x_debut_gauche + 2):1]
+def noir_bas_gauche(image):
+    global option_afficher, y_debut_bas, x_debut_gauche
 
-    return DemiLigne(ligne_utile, ligne_avant)
+    # pixels = image[y_debut_bas, x_debut_gauche]
+    # Coin, coin-haut, coin-droite.
+    pixels = np.array([
+        image[y_debut_bas, x_debut_gauche],
+        image[y_debut_bas-1, x_debut_gauche],
+        image[y_debut_bas, x_debut_gauche+1]
+    ], dtype=np.uint8)
+
+    return calcule_rotation(pixels)
 
 
-# Verifie que la colonne de droite de l'image utile est bien codée (cas 2.39):
-def DemiLigneDroite(image):
-    global delta_high
-    ligne_utile = image[y_debut_haut:y_debut_bas:1, x_debut_droite:(x_debut_droite + 1):1]  # Ligne limite
-    ligne_avant = image[y_debut_haut:y_debut_bas:1, (x_debut_droite - 1):x_debut_droite:1]
+# Vérifie que la colonne de droite de l'image utile est bien codée (cas 2.39):
+def noir_bas_droite(image):
+    global option_afficher, y_debut_bas, x_debut_droite
 
-    return DemiLigne(ligne_utile, ligne_avant)
+    # pixels = image[y_debut_bas, x_debut_droite]
+    # Coin, coin-haut, coin-gauche.
+    pixels = np.array([
+        image[y_debut_bas, x_debut_droite],
+        image[y_debut_bas-1, x_debut_droite],
+        image[y_debut_bas, x_debut_droite-1]
+    ], dtype=np.uint8)
+
+    return calcule_rotation(pixels)
 
 
 # Cloturer l'analyse d'une video (en cloturant son flux ainsi que celui du rapport):
@@ -378,9 +341,11 @@ if licence:
     # framerate = int(cfr.getFramerate())
     framerate = metadonnees.framerate()  # int(24)
 
-    ratio = cr.getRatio()  # '2.39'
+    # ratio= cr.getRatio()
+    ratio = cr.getRatio()  # '2;39'
 
     # Choix du ratio:
+    # setRatio(ratio, )
     resolution = metadonnees.resolution()  # '3840x2160'
 
     setRatio(ratio, resolution)
@@ -395,8 +360,6 @@ if licence:
 
     # Note: [-1] = dernier element de la liste.
     r.Rapport(fichier.split('/')[-1], "html")
-
-    #r.setRapport("== Debut du rapport ==\n")
 
     print('Projet en cours :')
     print(r.projet_en_cours())
@@ -433,17 +396,19 @@ if licence:
             print(str(i) + " / " + str(duree_image))
             r.savestate(i)
 
-        if not DemiLigneHaut(image):
-            Probleme("Demi ligne <strong>haut</strong>.", str(option_afficher), i)
+        # On saut le noir.
+        if image.max() > 0:
+            if noir_haut_gauche(image):
+                Probleme("Défaut rotation en <strong>haut/gauche</strong>.", str(option_afficher), i)
 
-        if not DemiLigneBas(image):
-            Probleme("Demi ligne <strong>bas</strong>.", str(option_afficher), i)
+            if noir_haut_droite(image, i):
+                Probleme("Défaut rotation en <strong>haut/droite</strong>.", str(option_afficher), i)
 
-        if not DemiLigneGauche(image):
-            Probleme("Demi ligne <strong>gauche</strong>.", str(option_afficher), i)
+            if noir_bas_gauche(image):
+                Probleme("Défaut rotation en <strong>bas/gauche</strong>.", str(option_afficher), i)
 
-        if not DemiLigneDroite(image):
-            Probleme("Demi ligne <strong>droite</strong>.", str(option_afficher), i)
+            if noir_bas_droite(image):
+                Probleme("Défaut rotation en <strong>bas/droite</strong>.", str(option_afficher), i)
 
     # On récupère les dernières valeurs de la liste.
     UpdateListeProbleme(i_global)  # De prime à bord, il ne faut pas incrémenter la valeur, elle l'est déjà.

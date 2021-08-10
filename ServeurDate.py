@@ -1,12 +1,12 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
+import locale
 # == IMPORTS ==
 import socket
 import struct
 import time
- 
-import locale
+
 locale.setlocale(locale.LC_TIME,'')
 
 

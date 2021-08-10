@@ -1,2 +1,5 @@
 Rapports/*
 __pycache__/*
+.DS_Store
+data.db
+*/__pycache__/*

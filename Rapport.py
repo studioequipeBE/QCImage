@@ -1,125 +1,288 @@
 #!/usr/bin/env python
-#-*- coding: utf-8 -*
+# -*- coding: utf-8 -*
 
-# Fichier: il gere le rapport généré. Le tout existe dans "Main.py". On pourait en faire un objet!
-# Version: 0.1
+# Fichier: il gere le rapport.
+# Export aussi une version JSON pour faciliter les traitements.
+# Backup dans une base de données SQLite le traitement en cours.
+# Version: 1.1.1
+
+import os
+import sqlite3
+from typing import NoReturn
+
+from timecode import Timecode
 
 # == IMPORTS ==
-import bdd
 import TimecodeP as tc
-from timecode import Timecode
-import os
-
 
 # == ATTRIBUTS ==
 
 # Fichier pour rapport:
-file_= None
+file_ = None
 
 # Numéro d'erreur.
-numero= 0
+numero = 0
 
 # Framerate du fichier:
-framerateG= None
-tc_debut= None
+framerate = None
+tc_debut = None
 
-# Type de rapport (HTML, txt, bdd):
-type_= None
+# Type de rapport (HTML, txt):
+type_ = None
 
-chemin_rapport= "Rapports/"
+chemin_rapport = "Rapports/"
+
+# ID du projet dans la base de données :
+id_projet = None
+
+# Base de données avec le rapport en cours. (on va essayer de créer le rapport à la fin!)
+db = None
+cur = None  # curseur pour faire les opérations sur la base de données.
+
+fichier_tmp = None
+
+ratio_ = None
+duree_image_ = None
+timecodestart_ = None
 
 
 # == FONCTIONS ==
+# Création du rapport en .txt ou HTML, on pourrait faire un rapport en HTML, plus classe voir ajouter les valeurs dans la base de donnees de QC! :)
+# Valeur de type_tmp= {txt, html}
+def Rapport(fichier, type_tmp="txt") -> NoReturn:
+    global type_, file_, chemin_rapport, db, cur, fichier_tmp
 
-# Creation du rapport en .txt, on pourrait faire un rapport en HTML, plus classe voir ajouter les valeurs dans la base de donnees de QC! :)
-# Valeur de type_tmp= {txt, html, bdd}
-def Rapport(fichier, type_tmp= "txt"):
-    global type_, file_, chemin_rapport
-    type_= type_tmp
+    fichier_tmp = fichier
+    type_ = type_tmp
 
-    if not os.path.exists(chemin_rapport):    #Tu remplaces chemin par le chemin complet
+    # On créé dans la base de données, isolation_level en None = autocommit.
+    db = sqlite3.connect('data.db', isolation_level=None)
+    cur = db.cursor()
+
+    # Si la table n'existe pas, on la créée :
+    cur.execute('''CREATE TABLE IF NOT EXISTS projet (id INTEGER PRIMARY KEY AUTOINCREMENT, fichier TEXT, statut TEXT, image_analyse TEXT, resolution TEXT, framerate TEXT, ratio TEXT)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS remarque (id_projet TEXT, tc_in TEXT, tc_out TEXT, probleme TEXT, option TEXT)''')
+
+    if not os.path.exists(chemin_rapport):  # Tu remplaces chemin par le chemin complet.
         os.mkdir(chemin_rapport)
-	
-    if type_ == "txt":
+
+    '''if type_ == "txt":
         file_= open(str(chemin_rapport) + "rapport_" + str(fichier) + ".txt", "w")
         file_.write("")
     elif type_ == "html":
         file_= open(str(chemin_rapport) + "rapport_" + str(fichier) + ".html", "w")
         file_.write("<html>\n<head>\n<title>Rapport: " + str(fichier) + "</title>\n</head>\n<body>\n")
-        file_.write("<style type=\"text/css\">\n.bord{\nborder-width: 1px;\n border-style: solid;\n border-bottom-width: 1px;\n}\n</style>\n")
-    else:
-        bdd.Open()
-        
+        file_.write("<style type=\"text/css\">")
+        file_.write(".bord{\n")
+        file_.write("\tborder-width: 1px;\n")
+        file_.write("\tborder-style: solid;\n")
+        file_.write("\tborder-bottom-width: 1px;\n")
+        file_.write("\t}\n")
+        file_.write("</style>\n")'''
+
+
+# Indique si un projet est en cours.
+def projet_en_cours() -> int:
+    global cur
+    cur.execute("SELECT count(*) FROM projet WHERE statut LIKE 'en cours'")
+
+    return cur.fetchall()
+
+
 # Quand on commence le rapport:
-def Start(fichier, duree, timecodestart= "00:00:00:00", framerate= "24", ratio= "2.39"):
-    global framerateG, tc_debut
-    framerateG= int(framerate)
+def Start(fichier: str, duree_image: int, timecodestart: str = "00:00:00:00", framerate_: int = 24, ratio: str = "2.39", resolution_: str = "1920x1080") -> NoReturn:
+    global framerate, tc_debut, file_, id_projet, ratio_, duree_image_, timecodestart_, resolution
+
+    ratio_ = ratio
+    duree_image_ = duree_image
+    timecodestart_ = timecodestart
+
+    framerate = int(framerate_)
+    resolution= resolution_
+
+    tc_debut = int(Timecode(framerate, timecodestart_).frames - 1)
+
+    # Ajoute le projet en base de données.
+    cur.execute("INSERT INTO projet (fichier, statut, image_analyse, resolution, framerate, ratio)" +
+                "VALUES ('" + fichier + "', 'en cours', '0', '" + resolution + "', '" + str(framerate) + "', '" + ratio + "')")
+
+    # Récupère l'ID de la dernière entrée :
+    id_projet = cur.lastrowid
+
     # Si on écrit un fichier texte:
     if type_ == "txt":
         file_.write("Fichier: " + fichier + "\n")
-        file_.write("Duree: " + str(duree) + " image(s) (TC " +  + ")\n")
+        file_.write("Durée: " + str(duree_image) + " image(s) (TC " + tc.frames_to_timecode(duree_image, framerate) + ")\n")
 
         # Parfois l'affichage du TC bug quand le fichier vient du réseau.
         try:
-            file_.write("Timecode debut: " + str(timecodestart) + "\n");
+            file_.write("Timecode début: " + timecodestart + "\n")
         except:
-            file_.write("Timecode debut: inconnu\n");
+            file_.write("Timecode début: inconnu\n")
         file_.write("Framerate: " + str(framerate) + " i/s\n")
+
     # Si on écrit un fichier HTML:
-    elif type_ == "html":
+    """elif type_ == "html":
         file_.write("<p><strong>Fichier:</strong> " + fichier + "</p>\n")
         file_.write("<p><strong>Ratio:</strong> " + ratio + "</p>\n")
-        print('01:'+str(duree))
-        print('02:'+str(framerateG))
-        print('03'+str(tc.frames_to_timecode(int(duree), int(framerateG))))
-        file_.write("<p><strong>Duree:</strong> " + str(duree) + " image(s) (TC " + tc.frames_to_timecode(int(duree), int(framerateG)) + ")</p>\n")
+        print('Framerate : ' + str(framerate))
+        print('Durée : ' + str(tc.frames_to_timecode(duree_image, framerate)))
+
+        file_.write("<p><strong>Durée:</strong> " + str(duree_image) + " image(s) (TC " + tc.frames_to_timecode(duree_image, framerate) + ")</p>\n")
 
         # Parfois l'affichage du TC bug quand le fichier vient du réseau.
         try:
             tc_debut= int(Timecode(framerate, timecodestart).frames - 1)
-            # print "TC debut: " + str(tc_debut)
-            file_.write("<p><strong>Timecode debut:</strong> " + str(timecodestart) + " (" + str(tc_debut) + ")</p>\n");
+            file_.write("<p><strong>Timecode début:</strong> " + timecodestart + " (" + str(tc_debut) + ")</p>\n")
         except:
-            file_.write("<p><strong>Timecode debut:</strong> <i>inconnu</i></p>\n");
+            file_.write("<p><strong>Timecode début:</strong> <i>inconnu</i></p>\n")
 
         file_.write("<p><strong>Framerate</strong>: " + str(framerate) + " i/s</p>\n")
         file_.write("<table class= \"bord\">\n")
-        file_.write("<tr><th class= \"bord\">n°</th><th class= \"bord\">TC IN</th><th class= \"bord\">TC OUT</th><th class= \"bord\">REMARK</th><th class= \"bord\">OPTION</th></tr>\n")
+        file_.write("<tr>")
+        file_.write("<th class= \"bord\">n°</th>")
+        file_.write("<th class= \"bord\">TC IN</th>")
+        file_.write("<th class= \"bord\">TC OUT</th>")
+        file_.write("<th class= \"bord\">REMARK</th>")
+        file_.write("<th class= \"bord\">OPTION</th>")
+        file_.write("</tr>\n")"""
 
-    # Si on ajoute les informations en base de données:
-    else:
-        bdd.Insert("rapport", "id_film, id_production, id_cadence, id_balayage, fichier, duree, id_ratio, id_format",
-                   "1, 1, 1, 1, \"" + str(fichier) + "\", '" + str(duree) + "', 1, 1")
 
 # Ecrire dans le rapport:
-def setRapport(message):
+"""def setRapport(message: str) -> NoReturn:
+    global file_
+
     if type_ == "txt":
         file_.write(message)
     elif type_ == "html":
-        file_.write("<tr><td class= \"bord\">" + message + "</td></tr>\n")
-    #else:
-    #    bdd.Insert(message)
+        file_.write("<tr><td class= \"bord\">" + message + "</td></tr>\n")"""
+
 
 # Ecrire dans le rapport:
-def addProbleme(tc_in, tc_out, probleme, option):
-    global numero, framerate, tc_debut
-    
-    if type_ == "txt":
+def addProbleme(tc_in_image: int, tc_out_image: int, probleme: str, option: str) -> NoReturn:
+    global numero, framerate, tc_debut, id_projet
+
+    tc_in_tc = tc.frames_to_timecode(int(tc_in_image)+tc_debut, framerate)
+    tc_out_tc = tc.frames_to_timecode(int(tc_out_image)+tc_debut, framerate)
+
+    cur.execute("INSERT INTO remarque VALUES ('" + str(id_projet) + "', '" + tc_in_tc + "', '" + tc_out_tc + "', '" + probleme + "', '" + option + "')")
+
+    """if type_ == "txt":
         file_.write(message)
     elif type_ == "html":
-        numero= numero + 1
-        file_.write("<tr><td class= \"bord\">" + str(numero) + "</td><td class= \"bord\">" + tc.frames_to_timecode(int(tc_in)+tc_debut, framerateG) + "</td><td class= \"bord\">" + tc.frames_to_timecode(int(tc_out)+tc_debut, framerateG) + "</td><td class= \"bord\">" + probleme + "</td><td class= \"bord\">" + option + "</td></tr>\n")
-    else:
-        bdd.Insert("rapport_commentaire_video", "id_rapport, timecode_in, timecode_out, remarque, echelle",
-                   "2, '" + tc_in + "', '" + tc_out + "', \"" + probleme + "\", 1")
+        numero = numero + 1
+        file_.write("<tr><td class= \"bord\">" + str(numero) + "</td><td class= \"bord\">" + tc_in_tc + "</td><td class= \"bord\">" + tc_out_tc + "</td><td class= \"bord\">" + probleme + "</td><td class= \"bord\">" + option + "</td></tr>\n")
+    """
+
+
+# Indique jusqu'où on était dans le rapport s'il y a eu un crash.
+def savestate(num_image) -> NoReturn:
+    global cur, id_projet
+    cur.execute('UPDATE projet SET image_analyse = "' + str(num_image) + '" WHERE id LIKE "' + str(id_projet) + '"')
+
 
 # Cloturer le flux du fichier de rapport:
-def close():
+def close() -> NoReturn:
+    global id_projet, file_, cur, fichier_tmp, type_, fichier_tmp, ratio_, duree_image_, timecodestart_, framerate, resolution
+
+    # On indique que le fichier a fini d'être analysé.
+    cur.execute('UPDATE projet SET statut = "fini" WHERE id LIKE "' + str(id_projet) + '"')
+
+    # Ecrit le fichier JSON depuis la base de données.
+    json = open(str(chemin_rapport) + "/JSON/rapport_" + str(fichier_tmp) + ".json", "w")
+    json.write('{\n')
+    json.write('\t"fichier" : "' + str(fichier_tmp) + '",\n')
+    json.write('\t"resolution" : "' + resolution + '",\n')
+    json.write('\t"framerate" : "' + str(framerate) + '",\n')
+    json.write('\t"ratio" : "' + ratio_ + '",\n')
+    json.write('\t"remarque" :\n')
+    json.write('\t\t[\n')
+
+    i = 0
+
+    for row in cur.execute('SELECT * FROM remarque WHERE id_projet LIKE "' + str(id_projet) + '" ORDER BY tc_in, tc_out ASC'):
+        print(row)
+        if i != 0 :
+            json.write(',\n')
+        json.write('\t\t\t{\n')
+        json.write('\t\t\t\t"tc_in" : "' + row[1]+'",\n')
+        json.write('\t\t\t\t"tc_out" : "' + row[2] + '",\n')
+        json.write('\t\t\t\t"remarque" : "' + row[3] + '",\n')
+        json.write('\t\t\t\t"option" : "' + row[4] + '"\n')
+        json.write('\t\t\t}')
+        i = i + 1
+    json.write('\n')
+
+    json.write('\t\t]\n')
+    json.write('}\n')
+    json.close()
+
+    # Si demande un fichier texte, on l'écrit ici.
     if type_ == "txt":
+        file_ = open(str(chemin_rapport) + "rapport_" + str(fichier_tmp) + ".txt", "w")
+        file_.write("")
+
+        # file_.write(message)
+
         file_.write("== Fin du rapport ==")
         file_.close()
+
+    # Si demande un fichier HTML, on l'écrit ici.
     elif type_ == "html":
-        file_.write("</table>\n</body>\n</html>")
+        file_ = open(str(chemin_rapport) + "rapport_" + str(fichier_tmp) + ".html", "w")
+        file_.write("<html>\n")
+        file_.write("\t<head>\n")
+        file_.write("\t\t<title>Rapport : " + str(fichier_tmp) + "</title>\n")
+
+        file_.write("\t\t<style type= \"text/css\">\n")
+        file_.write("\t\t.bord{\n")
+        file_.write("\t\t\tborder-width: 1px;\n")
+        file_.write("\t\t\tborder-style: solid;\n")
+        file_.write("\t\t\tborder-bottom-width: 1px;\n")
+        file_.write("\t\t\t}\n")
+        file_.write("\t\t</style>\n")
+
+        file_.write("\t</head>\n")
+        file_.write("\t<body>\n")
+        file_.write("\t\t<p>Rapport demi-ligne</p>\n")
+        file_.write("\t\t<p><strong>Fichier :</strong> " + fichier_tmp + "</p>\n")
+        file_.write("\t\t<p><strong>Ratio :</strong> " + ratio_ + "</p>\n")
+        print('Framerate : ' + str(framerate))
+        print('Durée (image) : ' + str(duree_image_))
+        print('Durée : ' + str(tc.frames_to_timecode(duree_image_, framerate)))
+
+        file_.write("\t\t<p><strong>Durée :</strong> " + str(duree_image_) + " image(s) (TC " + tc.frames_to_timecode(duree_image_, framerate) + ")</p>\n")
+
+        # Parfois l'affichage du TC bug quand le fichier vient du réseau.
+        try:
+            tc_debut = int(Timecode(framerate, timecodestart_).frames - 1)
+            file_.write("\t\t<p><strong>Timecode début :</strong> " + timecodestart_ + " (" + str(tc_debut) + ")</p>\n")
+        except:
+            file_.write("\t\t<p><strong>Timecode début :</strong> <i>inconnu</i></p>\n")
+
+        file_.write("\t\t<p><strong>Framerate :</strong> " + str(framerate) + " i/s</p>\n")
+        file_.write("\t\t<table class= \"bord\">\n")
+        file_.write("\t\t\t<tr>\n")
+        file_.write("\t\t\t\t<th class= \"bord\">n°</th>\n")
+        file_.write("\t\t\t\t<th class= \"bord\">TC IN</th>\n")
+        file_.write("\t\t\t\t<th class= \"bord\">TC OUT</th>\n")
+        file_.write("\t\t\t\t<th class= \"bord\">REMARK</th>\n")
+        file_.write("\t\t\t\t<th class= \"bord\">OPTION</th>\n")
+        file_.write("\t\t\t</tr>\n")
+
+        numero = 0
+
+        for row in cur.execute('SELECT * FROM remarque WHERE id_projet LIKE "' + str(id_projet) + '" ORDER BY tc_in, tc_out ASC'):
+            numero = numero + 1
+            file_.write("\t\t\t<tr>\n")
+            file_.write("\t\t\t\t<td class= \"bord\">" + str(numero) + "</td>\n")
+            file_.write("\t\t\t\t<td class= \"bord\">" + row[1] + "</td>\n")
+            file_.write("\t\t\t\t<td class= \"bord\">" + row[2] + "</td>\n")
+            file_.write("\t\t\t\t<td class= \"bord\">" + row[3] + "</td>\n")
+            file_.write("\t\t\t\t<td class= \"bord\">" + row[4] + "</td>\n")
+            file_.write("\t\t\t</tr>\n")
+
+        file_.write("\t\t</table>\n")
+        file_.write("\t</body>\n")
+        file_.write("</html>")
         file_.close()
-    else:
-        bdd.close()
